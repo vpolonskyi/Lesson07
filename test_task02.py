@@ -45,12 +45,44 @@ def books():
 
 
 @pytest.fixture
+def books_400():
+    return [
+        {"title": "Bubology"},
+        {"author": "Great Me"},
+        {"title": "Bubology", "author": "", "tome": "II"},
+        {"title": "Bubology", "author": ""},
+        {"title": "", "author": "Great Me"},
+        "abc",
+        123,
+        [1, 2, 3],
+        [{"title": "", "author": "Great Me"}, 123],
+        {"title": "123456789012345678901234567890123456789012345678901", "author": "Great Me"},
+        {"title": "Bubology", "author": "123456789012345678901234567890123456789012345678901"}]
+
+
+@pytest.fixture
 def roles():
     return [
         # {"name": "Bubolog Hero", "type": "Junior topotun", "level": 3, "book": book_url},
         {"name": "Bubolog Hero", "type": "Junior topotun", "level": 3},
         {"name": "New Bubolog Hero", "type": "God of topotun", "level": 800},
-        {"name": "Newest Bubolog Hero", "type": "Just God", "level": 99999999}]
+        {"name": "Newest Bubolog Hero", "type": "Just God", "level": 99999999},
+        {"name": "Good old Bubolog Hero", "type": "Kid of topotun"}]
+
+@pytest.fixture
+def roles_400():
+    return [
+        {"name": "Bubolog Hero"},
+        {"type": "Just God", "level": 99999999},
+        {"name": "Bubolog Hero", "level": 3},
+        # {"name": "New Bubolog Hero", "type": "God of topotun", "level": 800, "coolnest": "WOW!"},
+        # {"name": "123456789012345678901234567890123456789012345678901", "type": "Junior topotun", "level": 3},
+        # {"name": "Bubolog Hero", "type": "123456789012345678901234567890123456789012345678901", "level": 3},
+        {"name": "Bubolog Hero", "type": "Junior topotun", "level": 123456789012345678901234567890123456789012345678901},
+        "abc",
+        123,
+        [1, 2, 3],
+        [{"title": "", "author": "Great Me"}, 123]]
 
 
 def obj_create(conn, urn_b: str, urn_r: str, objects: list = None) -> list:
@@ -96,11 +128,14 @@ def obj_create(conn, urn_b: str, urn_r: str, objects: list = None) -> list:
 
 
 def test_obj_read(conn, urn_b, urn_r, cleaner, books, roles):
+    print("\ntest_obj_read")
     objs = obj_create(conn, urn_b, urn_r, objects=books)
-    book_id = objs[0]["id"]
+    valid_book_id = objs[0]["id"]
     fullroles = []
     for role in roles:
-        role.update({"book": f"http://{conn.host}{urn_b}{book_id}"})
+        if role.get("level") is None:
+            role.update({"level": 0})
+        role.update({"book": f"http://{conn.host}{urn_b}{valid_book_id}"})
         fullroles.append(role)
     objs.extend(obj_create(conn, urn_b, urn_r, objects=fullroles))
 
@@ -123,34 +158,61 @@ def test_obj_read(conn, urn_b, urn_r, cleaner, books, roles):
         print("Object ID", obj["id"], "added to cleaner list")
 
 
-def test_book_create(conn, cleaner, books, urn_b):
+def test_object_create(conn, cleaner, books, books_400, roles, roles_400, urn_b, urn_r):
+    print("\ntest_object_create")
     obj_created = []
-    for book in books:
-        print("\nCreating book", book)
+    objects = books + books_400 + roles + roles_400
+    for obj in objects:
+        print("\nCreating object", obj)
+        if obj in books + books_400:
+            urn = urn_b
+        else:
+            urn = urn_r
+            obj.update({"book": f"http://{conn.host}{urn_b}{valid_book_id}"})
         conn.request("POST",
-                     urn_b,
-                     json.dumps(book),
+                     urn,
+                     json.dumps(obj),
                      {"Content-Type": "application/json"}
                      )
         stat = conn.getresponse()
-        assert stat.status == 201, "Http server return unexpected code while creating object"
 
-        resp = json.loads(stat.read().decode('utf-8'))
-        book.update({"id": resp["id"]})
-        assert book == resp, "Created object does not match inputted data"
+        if obj in books_400 + roles_400:
+            resp = stat.read()
+            assert stat.status == 400, "Http server return unexpected code while creating object"
+            conn.request("GET", urn)
+            stat = conn.getresponse()
+            resp = json.loads(stat.read().decode('utf-8'))
+            assert obj not in resp, "Target page unexpected contain created object"
 
-        cleaner.append(urn_b + str(resp["id"]))
-        print("Book ID", resp["id"], "added to cleaner list")
-        obj_created.append(book)
+        else:
+            resp = json.loads(stat.read().decode('utf-8'))
+            assert stat.status == 201, "Http server return unexpected code while creating object"
+            if obj in books and stat.status == 201:
+                valid_book_id = resp["id"]
+            if obj in roles and obj.get("level") is None:
+                obj.update({"level": 0})
+            obj.update({"id": resp["id"]})
+            assert obj == resp, "Created object does not match inputted data"
 
-        conn.request("GET", urn_b)
-        stat = conn.getresponse()
-        resp = json.loads(stat.read().decode('utf-8'))
-        assert book in resp, "Target page doesn't contain created object"
+        if stat.status == 201:
+            cleaner.append(urn + str(resp["id"]))
+            print("Object ID", resp["id"], "added to cleaner list")
+            obj_created.append(obj)
+
+            conn.request("GET", urn)
+            stat = conn.getresponse()
+            resp = json.loads(stat.read().decode('utf-8'))
+            assert obj in resp, "Target page doesn't contain created object"
 
     for obj in obj_created:
-        conn.request("GET", urn_b + str(obj["id"]))
+        if obj in books:
+            urn = urn_b
+        else:
+            urn = urn_r
+        conn.request("GET", urn + str(obj["id"]))
         stat = conn.getresponse()
-        assert stat.status == 200, "Http server return unexpected code while reading object by ID"
         resp = json.loads(stat.read().decode('utf-8'))
+        assert stat.status == 200, "Http server return unexpected code while reading object by ID"
         assert obj == resp, "Readed object does not match created object"
+
+# def test_obj_update()
